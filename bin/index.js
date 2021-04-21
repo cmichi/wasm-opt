@@ -4,6 +4,7 @@ const path = require('path');
 const fetch = require('node-fetch');
 const { promisify } = require('util');
 
+const mkdir = promisify(fs.mkdir);
 const copyFile = promisify(fs.copyFile);
 const rmdir = promisify(fs.rmdir);
 const unlink = promisify(fs.unlink);
@@ -16,28 +17,27 @@ const writeFile = promisify(fs.writeFile);
  */
 async function getUrl() {
   const { arch, platform } = process;
+  const baseURL = 'https://github.com/WebAssembly/binaryen/releases/download/version_100';
 
   switch (platform) {
     case 'win32':
       if (arch === 'x64') {
-        return 'https://github.com/WebAssembly/binaryen/releases/download/1.39.1/binaryen-1.39.1-x86_64-windows.tar.gz';
-      } else if (arch === 'x32') {
-        return 'https://github.com/WebAssembly/binaryen/releases/download/1.39.1/binaryen-1.39.1-x86-windows.tar.gz';
+        return `${baseURL}/binaryen-version_100-x86_64-windows.tar.gz`;
       }
+      break;
     case 'darwin':
-      if (arch === '64') {
-        return 'https://github.com/WebAssembly/binaryen/releases/download/1.39.1/binaryen-1.39.1-x86_64-apple-darwin.tar.gz';
+      if (arch === 'x64') {
+        return `${baseURL}/binaryen-version_100-x86_64-macos.tar.gz`;
       }
+      break;
     case 'linux':
       if (arch === 'x64') {
-        return 'https://github.com/WebAssembly/binaryen/releases/download/1.39.1/binaryen-1.39.1-x86_64-linux.tar.gz';
-      } else if (arch === 'x32') {
-        return 'https://github.com/WebAssembly/binaryen/releases/download/1.39.1/binaryen-1.39.1-x86-linux.tar.gz';
+        return `${baseURL}/binaryen-version_100-x86_64-linux.tar.gz`;
       }
+      break;
   }
 
-  console.log('\x1b[33mThis platform not supported\x1b[0m');
-  process.exit();
+  throw new Error('\x1b[33mThis platform not supported\x1b[0m');
 }
 
 /**
@@ -54,16 +54,8 @@ async function getExecutableFilename() {
  *
  * @returns {Promise<string>} unpack folder name
  */
-async function getUnpackedFoldername() {
-  if (process.platform !== 'win32') {
-    return 'binaryen-1.39.1';
-  }
-
-  if (process.arch === 'x64') {
-    return 'binaryen-1.39.1-x86_64-windows';
-  } else {
-    return 'binaryen-1.39.1-x86-windows';
-  }
+async function getUnpackedFolderName() {
+  return 'binaryen-version_100';
 }
 
 /**
@@ -82,25 +74,39 @@ async function main() {
 
     await tar.extract({
       file: binariesOutputPath,
-      filter: (_path, stat) => stat.header
-        .path
-        .split('/')
-        .includes(executableFilename),
+      filter: (_path, stat) => {
+        const { path: filePath } = stat.header
+
+        return [executableFilename, 'libbinaryen.dylib'].some((filename) => filePath.endsWith(filename));
+      }
     });
 
-    const unpackedFolder = path.resolve(__dirname, '..', await getUnpackedFoldername());
-    const downloadedWasmOpt = path.resolve(unpackedFolder, executableFilename);
+    const unpackedFolder = path.resolve(__dirname, '..', await getUnpackedFolderName());
+    const unpackedLibFolder = path.resolve(unpackedFolder, 'lib');
+    const unpackedBinFolder = path.resolve(unpackedFolder, 'bin');
+    const downloadedWasmOpt = path.resolve(unpackedBinFolder, executableFilename);
+    const downloadedLibbinaryen = path.resolve(unpackedLibFolder, 'libbinaryen.dylib');
     const outputWasmOpt = path.resolve(__dirname, await getExecutableFilename());
+    const outputLibbinaryen = path.resolve(__dirname, '../lib/libbinaryen.dylib');
+
+    await mkdir(path.resolve(__dirname, '../lib'));
 
     await copyFile(downloadedWasmOpt, outputWasmOpt);
+    await copyFile(downloadedLibbinaryen, outputLibbinaryen);
 
     await unlink(binariesOutputPath);
     await unlink(downloadedWasmOpt);
+    await unlink(downloadedLibbinaryen);
+    await rmdir(unpackedBinFolder);
+    await rmdir(unpackedLibFolder);
     await rmdir(unpackedFolder);
   } catch (e) {
-    console.error(`\x1b[31m${e}\x1b[0m`);
-    process.exit(1);
+    throw new Error(`\x1b[31m${e}\x1b[0m`);
   }
 }
 
-main();
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
